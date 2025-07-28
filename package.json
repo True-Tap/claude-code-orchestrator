@@ -1,0 +1,93 @@
+{
+  "name": "claude-code-orchestrator",
+  "version": "1.0.0",
+  "description": "Multi-agent orchestration tool for Claude Code CLI instances",
+  "main": "dist/index.js",
+  "bin": {
+    "claude-orchestrator": "./bin/claude-orchestrator.js",
+    "co": "./bin/claude-orchestrator.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write src/**/*.ts",
+    "prepublishOnly": "npm run build",
+    "postinstall": "node scripts/setup.js"
+  },
+  "keywords": [
+    "claude-code",
+    "orchestration",
+    "multi-agent",
+    "ai-automation",
+    "workflow",
+    "development-tools"
+  ],
+  "author": "True Tap Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/True-Tap/claude-code-orchestrator.git"
+  },
+  "homepage": "https://github.com/True-Tap/claude-code-orchestrator#readme",
+  "bugs": {
+    "url": "https://github.com/True-Tap/claude-code-orchestrator/issues"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "preferGlobal": true,
+  "dependencies": {
+    "commander": "^11.0.0",
+    "inquirer": "^9.2.0",
+    "chalk": "^5.3.0",
+    "ora": "^7.0.0",
+    "fs-extra": "^11.1.0",
+    "yaml": "^2.3.0",
+    "simple-git": "^3.19.0",
+    "uuid": "^9.0.0",
+    "axios": "^1.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/fs-extra": "^11.0.0",
+    "@types/uuid": "^9.0.0",
+    "@types/inquirer": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.45.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.1.0",
+    "ts-node": "^10.9.0",
+    "jest": "^29.6.0",
+    "@types/jest": "^29.5.0",
+    "ts-jest": "^29.1.0"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "scripts/",
+    "templates/",
+    "README.md",
+    "LICENSE"
+  ],
+  "claudeCode": {
+    "orchestratorVersion": "1.0.0",
+    "minClaudeCodeVersion": "0.1.0",
+    "supportedAgents": [
+      "general-purpose",
+      "productivity-workflow-optimizer", 
+      "hardware-integration-specialist",
+      "test-automation-engineer",
+      "ux-animation-director",
+      "architecture-reviewer",
+      "security-audit-specialist",
+      "solana-mobile-expert",
+      "devops-deployment-engineer",
+      "react-native-performance-engineer"
+    ]
+  }
+}
