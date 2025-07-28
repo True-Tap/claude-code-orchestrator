@@ -1,9 +1,9 @@
 /**
  * Claude Code Integration Layer
  *
- * Provides seamless integration between Claude Code CLI and the orchestrator,
- * enabling natural language orchestration requests through slash commands and
- * intelligent task detection.
+ * Enhanced with context-aware natural language processing, multi-turn conversations,
+ * domain-specific understanding, and adaptive prompt generation for intelligent
+ * orchestration requests through slash commands and conversational interfaces.
  */
 
 import {
@@ -20,9 +20,92 @@ import {
   OrchestrationStatus,
 } from '../types';
 
+export interface ConversationContext {
+  id: string;
+  userId?: string;
+  sessionId?: string;
+  history: ConversationTurn[];
+  projectContext?: ProjectContext;
+  preferences?: UserPreferences;
+  activeTask?: string;
+  lastIntent?: string;
+  confidence?: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ConversationTurn {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: Date;
+  intent?: string;
+  entities?: Record<string, string>;
+  confidence?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface ProjectContext {
+  framework: string;
+  platform: string;
+  domain: string[];
+  technologies: string[];
+  complexity: 'simple' | 'moderate' | 'complex';
+  teamSize: number;
+  timeline?: string;
+  constraints?: string[];
+  preferences?: {
+    coordination: CoordinationStrategy;
+    agentPriorities: Record<string, number>;
+    qualityThresholds: Record<string, number>;
+  };
+}
+
+export interface UserPreferences {
+  preferredAgents: string[];
+  avoidedAgents: string[];
+  defaultStrategy: CoordinationStrategy;
+  verbosity: 'minimal' | 'standard' | 'detailed';
+  autoConfirm: boolean;
+  notificationPreferences: {
+    progress: boolean;
+    completion: boolean;
+    errors: boolean;
+  };
+}
+
+export interface IntentClassification {
+  intent: string;
+  confidence: number;
+  entities: Record<string, string>;
+  context: Record<string, any>;
+  suggestions?: string[];
+}
+
+export interface ContextualPrompt {
+  agentId: string;
+  prompt: string;
+  context: Record<string, any>;
+  priority: number;
+  estimatedComplexity: number;
+  dependencies: string[];
+}
+
+interface DomainKnowledge {
+  vocabulary: Record<string, string[]>;
+  patterns: RegExp[];
+  commonTasks: string[];
+  agentAffinities: Record<string, number>;
+  complexityFactors: string[];
+}
+
 export class ClaudeCodeIntegration {
   private availableAgents: Record<string, AgentInfo>;
   private orchestrationPatterns: RegExp[];
+  private conversations: Map<string, ConversationContext> = new Map();
+  private intentPatterns: Map<string, RegExp[]> = new Map();
+  private domainModels: Map<string, DomainKnowledge> = new Map();
+  private contextualMemory: Map<string, any> = new Map();
 
   constructor() {
     this.availableAgents = {
@@ -116,6 +199,9 @@ export class ClaudeCodeIntegration {
       // Quality assurance combinations
       /.*(?:review|audit|analyz).*(?:and|with).*(?:implement|fix|improv)/i,
     ];
+
+    this.initializeNLPCapabilities();
+    this.initializeDomainKnowledge();
   }
 
   async handleSlashCommand(command: string, args: string): Promise<OrchestrationResult> {
@@ -201,6 +287,7 @@ export class ClaudeCodeIntegration {
             {
               name: info.name,
               description: info.description,
+              capabilities: info.bestFor, // Use bestFor as capabilities
               bestFor: info.bestFor.slice(0, 3), // Top 3 use cases
             },
           ])
@@ -718,5 +805,1052 @@ export class ClaudeCodeIntegration {
       reasons.length > 0 ? reasons.join('; ') : 'No clear orchestration benefits detected';
 
     return [shouldOrchestrate, Math.min(confidence, 1.0), reason];
+  }
+
+  /**
+   * Enhanced conversational interface with context awareness
+   */
+  async handleConversationalInput(
+    input: string,
+    conversationId?: string,
+    userId?: string
+  ): Promise<OrchestrationResult> {
+    const context = this.getOrCreateConversationContext(conversationId, userId);
+    
+    // Classify intent
+    const intent = this.classifyIntent(input, context);
+    
+    // Update conversation history
+    this.addConversationTurn(context, {
+      id: `turn_${Date.now()}`,
+      role: 'user',
+      content: input,
+      timestamp: new Date(),
+      intent: intent.intent,
+      entities: intent.entities,
+      confidence: intent.confidence,
+    });
+
+    // Generate contextual response
+    const response = await this.generateContextualResponse(intent, context);
+    
+    // Add assistant response to history
+    this.addConversationTurn(context, {
+      id: `turn_${Date.now()}_response`,
+      role: 'assistant',
+      content: response.nextSteps?.join(' ') || 'I understand your request.',
+      timestamp: new Date(),
+    });
+
+    return response;
+  }
+
+  /**
+   * Generate contextual prompts for agents based on conversation history
+   */
+  generateContextualPrompts(
+    task: string,
+    agents: string[],
+    conversationId?: string
+  ): Map<string, ContextualPrompt> {
+    const prompts = new Map<string, ContextualPrompt>();
+    const context = conversationId ? this.conversations.get(conversationId) : null;
+    
+    for (const agentId of agents) {
+      const agentInfo = this.availableAgents[agentId];
+      if (!agentInfo) continue;
+
+      const basePrompt = this.generateBasePrompt(task, agentInfo);
+      const contextualEnhancements = this.getContextualEnhancements(agentId, context || null);
+      const domainSpecificInfo = this.getDomainSpecificInfo(task, agentId);
+      
+      const enhancedPrompt = this.combinePromptElements(
+        basePrompt,
+        contextualEnhancements,
+        domainSpecificInfo,
+        context || null
+      );
+
+      prompts.set(agentId, {
+        agentId,
+        prompt: enhancedPrompt,
+        context: {
+          task,
+          conversationHistory: context?.history || [],
+          projectContext: context?.projectContext,
+          userPreferences: context?.preferences,
+        },
+        priority: this.calculateAgentPriority(agentId, task, context || null),
+        estimatedComplexity: this.estimateAgentComplexity(agentId, task),
+        dependencies: this.identifyAgentDependencies(agentId, agents, task),
+      });
+    }
+
+    return prompts;
+  }
+
+  /**
+   * Analyze task context and extract relevant information
+   */
+  analyzeTaskContext(task: string, conversationHistory?: ConversationTurn[]): {
+    domain: string[];
+    complexity: number;
+    urgency: 'low' | 'medium' | 'high';
+    constraints: string[];
+    preferences: Record<string, any>;
+  } {
+    const taskLower = task.toLowerCase();
+    
+    // Domain detection
+    const domains: string[] = [];
+    for (const [domain, knowledge] of this.domainModels) {
+      if (knowledge.patterns.some(pattern => pattern.test(taskLower))) {
+        domains.push(domain);
+      }
+    }
+
+    // Complexity analysis
+    let complexity = this.calculateTaskComplexity(task);
+    
+    // Analyze conversation history for additional context
+    if (conversationHistory) {
+      const recentTurns = conversationHistory.slice(-5);
+      const urgencyKeywords = ['urgent', 'asap', 'quick', 'immediately', 'priority'];
+      const complexityKeywords = ['complex', 'difficult', 'challenging', 'comprehensive'];
+      
+      for (const turn of recentTurns) {
+        if (urgencyKeywords.some(keyword => turn.content.toLowerCase().includes(keyword))) {
+          complexity += 1;
+        }
+        if (complexityKeywords.some(keyword => turn.content.toLowerCase().includes(keyword))) {
+          complexity += 2;
+        }
+      }
+    }
+
+    // Extract constraints
+    const constraints = this.extractConstraints(task, conversationHistory);
+
+    // Determine urgency
+    const urgency = this.determineUrgency(task, conversationHistory);
+
+    // Extract preferences
+    const preferences = this.extractPreferences(conversationHistory);
+
+    return {
+      domain: domains,
+      complexity: Math.min(complexity, 10),
+      urgency,
+      constraints,
+      preferences,
+    };
+  }
+
+  /**
+   * Update user preferences based on interaction patterns
+   */
+  updateUserPreferences(
+    conversationId: string,
+    preferences: Partial<UserPreferences>
+  ): void {
+    const context = this.conversations.get(conversationId);
+    if (!context) return;
+
+    // Filter out undefined values before merging
+    const definedPreferences = Object.fromEntries(
+      Object.entries(preferences).filter(([_, value]) => value !== undefined)
+    ) as Partial<UserPreferences>;
+    
+    context.preferences = {
+      ...context.preferences,
+      ...definedPreferences,
+    } as UserPreferences;
+    
+    context.updatedAt = new Date();
+    this.conversations.set(conversationId, context);
+  }
+
+  /**
+   * Get intelligent suggestions based on context
+   */
+  getIntelligentSuggestions(
+    task: string,
+    conversationId?: string
+  ): {
+    agentSuggestions: string[];
+    strategySuggestions: CoordinationStrategy[];
+    optimizations: string[];
+    risks: string[];
+  } {
+    const context = conversationId ? this.conversations.get(conversationId) : null;
+    const taskAnalysis = this.analyzeTaskContext(task, context?.history);
+    
+    // Enhanced agent suggestions
+    const agentSuggestions = this.getEnhancedAgentSuggestions(task, taskAnalysis, context || null);
+    
+    // Strategy suggestions
+    const strategySuggestions = this.getStrategySuggestions(taskAnalysis, agentSuggestions.length);
+    
+    // Optimization suggestions
+    const optimizations = this.getOptimizationSuggestions(task, taskAnalysis, context || null);
+    
+    // Risk identification
+    const risks = this.identifyRisks(task, taskAnalysis, agentSuggestions);
+
+    return {
+      agentSuggestions,
+      strategySuggestions,
+      optimizations,
+      risks,
+    };
+  }
+
+  private initializeNLPCapabilities(): void {
+    // Initialize intent patterns
+    this.intentPatterns.set('orchestrate', [
+      /(?:orchestrate|coordinate|manage)\s+(.+)/i,
+      /(?:run|execute|start)\s+(?:orchestration|coordination)\s+for\s+(.+)/i,
+      /(?:help me|can you)\s+(?:implement|build|create)\s+(.+)/i,
+    ]);
+
+    this.intentPatterns.set('query_status', [
+      /(?:what'?s|how'?s)\s+(?:the\s+)?(?:status|progress)/i,
+      /(?:check|show)\s+(?:status|progress)/i,
+      /(?:how\s+is|what\s+about)\s+(?:the\s+)?(?:orchestration|task)/i,
+    ]);
+
+    this.intentPatterns.set('modify_task', [
+      /(?:change|modify|update|adjust)\s+(.+)/i,
+      /(?:add|include|also)\s+(.+)/i,
+      /(?:remove|exclude|skip)\s+(.+)/i,
+    ]);
+
+    this.intentPatterns.set('request_help', [
+      /(?:help|assist|guide)\s*(?:me)?/i,
+      /(?:how\s+(?:do|can)\s+I|what\s+should\s+I)/i,
+      /(?:explain|tell\s+me\s+about)/i,
+    ]);
+
+    this.intentPatterns.set('express_preference', [
+      /(?:I\s+(?:prefer|like|want|need))\s+(.+)/i,
+      /(?:use|employ|leverage)\s+(.+)/i,
+      /(?:avoid|don'?t\s+use|skip)\s+(.+)/i,
+    ]);
+  }
+
+  private initializeDomainKnowledge(): void {
+    // Blockchain/Crypto domain
+    this.domainModels.set('blockchain', {
+      vocabulary: {
+        tokens: ['token', 'cryptocurrency', 'crypto', 'coin', 'genesis', 'bonk'],
+        operations: ['transaction', 'transfer', 'payment', 'verification', 'validation'],
+        platforms: ['solana', 'ethereum', 'blockchain', 'web3', 'defi'],
+        security: ['wallet', 'private key', 'signature', 'encryption', 'audit'],
+      },
+      patterns: [
+        /(?:solana|blockchain|crypto|token|wallet)/i,
+        /(?:payment|transaction|transfer)/i,
+        /(?:genesis\s+token|bonk|cryptocurrency)/i,
+      ],
+      commonTasks: [
+        'wallet integration',
+        'token verification',
+        'payment processing',
+        'transaction handling',
+      ],
+      agentAffinities: {
+        'solana-mobile-expert': 0.9,
+        'security-audit-specialist': 0.7,
+        'architecture-reviewer': 0.6,
+      },
+      complexityFactors: ['security', 'compliance', 'integration', 'testing'],
+    });
+
+    // Hardware domain
+    this.domainModels.set('hardware', {
+      vocabulary: {
+        connectivity: ['bluetooth', 'ble', 'nfc', 'wifi', 'radio'],
+        devices: ['phone', 'device', 'hardware', 'sensor', 'peripheral'],
+        operations: ['scan', 'connect', 'pair', 'transmit', 'receive'],
+        protocols: ['protocol', 'communication', 'data', 'signal'],
+      },
+      patterns: [
+        /(?:bluetooth|ble|nfc|hardware)/i,
+        /(?:device|peripheral|sensor)/i,
+        /(?:connect|pair|communicate)/i,
+      ],
+      commonTasks: [
+        'device integration',
+        'bluetooth connectivity',
+        'NFC implementation',
+        'hardware permissions',
+      ],
+      agentAffinities: {
+        'hardware-integration-specialist': 0.9,
+        'test-automation-engineer': 0.6,
+        'security-audit-specialist': 0.5,
+      },
+      complexityFactors: ['permissions', 'compatibility', 'protocols', 'testing'],
+    });
+
+    // Performance domain
+    this.domainModels.set('performance', {
+      vocabulary: {
+        metrics: ['performance', 'speed', 'latency', 'throughput', 'efficiency'],
+        optimization: ['optimize', 'improve', 'enhance', 'accelerate', 'streamline'],
+        issues: ['slow', 'lag', 'bottleneck', 'memory leak', 'crash'],
+        tools: ['profiler', 'monitor', 'benchmark', 'analysis'],
+      },
+      patterns: [
+        /(?:performance|optimization|speed|memory)/i,
+        /(?:slow|lag|bottleneck|crash)/i,
+        /(?:optimize|improve|enhance)/i,
+      ],
+      commonTasks: [
+        'performance optimization',
+        'memory management',
+        'bundle size reduction',
+        'startup time improvement',
+      ],
+      agentAffinities: {
+        'react-native-performance-engineer': 0.9,
+        'architecture-reviewer': 0.6,
+        'test-automation-engineer': 0.5,
+      },
+      complexityFactors: ['profiling', 'measurement', 'optimization', 'validation'],
+    });
+
+    // Add more domains as needed...
+  }
+
+  private getOrCreateConversationContext(
+    conversationId?: string,
+    userId?: string
+  ): ConversationContext {
+    const id = conversationId || `conv_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    if (this.conversations.has(id)) {
+      return this.conversations.get(id)!;
+    }
+
+    const context: ConversationContext = {
+      id,
+      userId,
+      history: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    this.conversations.set(id, context);
+    return context;
+  }
+
+  private classifyIntent(input: string, context: ConversationContext): IntentClassification {
+    const inputLower = input.toLowerCase();
+    let bestMatch: IntentClassification = {
+      intent: 'unknown',
+      confidence: 0,
+      entities: {},
+      context: {},
+    };
+
+    for (const [intentName, patterns] of this.intentPatterns) {
+      for (const pattern of patterns) {
+        const match = pattern.exec(inputLower);
+        if (match) {
+          const confidence = this.calculateIntentConfidence(match, context);
+          if (confidence > bestMatch.confidence) {
+            bestMatch = {
+              intent: intentName,
+              confidence,
+              entities: this.extractEntities(input, match),
+              context: { match: match[0], groups: match.slice(1) },
+            };
+          }
+        }
+      }
+    }
+
+    // Apply context-based confidence adjustment
+    bestMatch.confidence = this.adjustConfidenceBasedOnContext(bestMatch, context);
+
+    return bestMatch;
+  }
+
+  private addConversationTurn(context: ConversationContext, turn: ConversationTurn): void {
+    context.history.push(turn);
+    context.updatedAt = new Date();
+    
+    // Keep only last 20 turns for efficiency
+    if (context.history.length > 20) {
+      context.history = context.history.slice(-20);
+    }
+  }
+
+  private async generateContextualResponse(
+    intent: IntentClassification,
+    context: ConversationContext
+  ): Promise<OrchestrationResult> {
+    switch (intent.intent) {
+      case 'orchestrate':
+        return await this.handleContextualOrchestration(intent, context);
+      
+      case 'query_status':
+        return await this.handleStatusQuery(intent, context);
+      
+      case 'modify_task':
+        return await this.handleTaskModification(intent, context);
+      
+      case 'request_help':
+        return await this.handleHelpRequest(intent, context);
+      
+      case 'express_preference':
+        return await this.handlePreferenceExpression(intent, context);
+      
+      default:
+        return {
+          success: false,
+          action: 'unclear_intent',
+          error: 'I didn\'t understand your request. Could you please rephrase?',
+          nextSteps: [
+            'Try: "orchestrate [task description]"',
+            'Or: "help with [specific topic]"',
+            'Or: "what\'s the status?"',
+          ],
+        };
+    }
+  }
+
+  private async handleContextualOrchestration(
+    intent: IntentClassification,
+    context: ConversationContext
+  ): Promise<OrchestrationResult> {
+    const taskDescription = intent.context.groups?.[0] || intent.entities.task || '';
+    
+    if (!taskDescription.trim()) {
+      return {
+        success: false,
+        action: 'missing_task_description',
+        error: 'What would you like me to orchestrate?',
+        nextSteps: [
+          'Describe the task you want to implement',
+          'For example: "implement payment system with security review"',
+        ],
+      };
+    }
+
+    // Use existing orchestration logic but with enhanced context
+    const result = await this.handleOrchestrateCommand(taskDescription);
+    
+    // Enhance with conversational context
+    if (result.success && result.plan) {
+      result.plan = this.enhancePlanWithContext(result.plan, context);
+    }
+
+    return result;
+  }
+
+  private async handleStatusQuery(
+    intent: IntentClassification,
+    context: ConversationContext
+  ): Promise<OrchestrationResult> {
+    if (context.activeTask) {
+      return {
+        success: true,
+        action: 'status_update',
+        status: await this.getOrchestrationStatus(),
+        nextSteps: [
+          'Current task: ' + context.activeTask,
+          'Use "modify task" to make changes',
+          'Use "orchestrate [new task]" to start fresh',
+        ],
+      };
+    } else {
+      return {
+        success: true,
+        action: 'no_active_task',
+        nextSteps: [
+          'No active orchestration',
+          'Start with: "orchestrate [task description]"',
+          'Or: "help me implement [feature]"',
+        ],
+      };
+    }
+  }
+
+  private async handleTaskModification(
+    intent: IntentClassification,
+    context: ConversationContext
+  ): Promise<OrchestrationResult> {
+    const modification = intent.context.groups?.[0] || '';
+    
+    if (!context.activeTask) {
+      return {
+        success: false,
+        action: 'no_active_task',
+        error: 'No active task to modify',
+        nextSteps: ['Start with: "orchestrate [task description]"'],
+      };
+    }
+
+    // Apply modification to active task
+    const modifiedTask = this.applyTaskModification(context.activeTask, modification);
+    context.activeTask = modifiedTask;
+
+    return await this.handleOrchestrateCommand(modifiedTask);
+  }
+
+  private async handleHelpRequest(
+    intent: IntentClassification,
+    context: ConversationContext
+  ): Promise<OrchestrationResult> {
+    const topic = intent.context.groups?.[0] || '';
+    
+    return {
+      success: true,
+      action: 'help_provided',
+      nextSteps: this.getContextualHelp(topic, context),
+      examples: [
+        'orchestrate implement BLE payments with security review',
+        'help me optimize performance',
+        'what agents are available?',
+        'show status',
+      ],
+    };
+  }
+
+  private async handlePreferenceExpression(
+    intent: IntentClassification,
+    context: ConversationContext
+  ): Promise<OrchestrationResult> {
+    const preference = intent.context.groups?.[0] || '';
+    
+    // Parse and store preference
+    const parsedPreferences = this.parsePreference(preference);
+    this.updateUserPreferences(context.id, parsedPreferences);
+
+    return {
+      success: true,
+      action: 'preference_updated',
+      nextSteps: [
+        `Preference noted: ${preference}`,
+        'This will be applied to future orchestrations',
+        'Continue with your task description',
+      ],
+    };
+  }
+
+  // Additional helper methods for enhanced NLP capabilities
+
+  private generateBasePrompt(task: string, agentInfo: AgentInfo): string {
+    return `As a ${agentInfo.name}, you are tasked with: ${task}. 
+Your expertise includes: ${agentInfo.capabilities.join(', ')}. 
+Focus on: ${agentInfo.bestFor.join(', ')}.`;
+  }
+
+  private getContextualEnhancements(agentId: string, context: ConversationContext | null): string {
+    if (!context?.projectContext) return '';
+
+    const enhancements: string[] = [];
+    
+    if (context.projectContext.framework) {
+      enhancements.push(`Framework: ${context.projectContext.framework}`);
+    }
+    
+    if (context.projectContext.constraints?.length) {
+      enhancements.push(`Constraints: ${context.projectContext.constraints.join(', ')}`);
+    }
+
+    return enhancements.length > 0 ? `\nContext: ${enhancements.join('; ')}` : '';
+  }
+
+  private getDomainSpecificInfo(task: string, agentId: string): string {
+    const taskLower = task.toLowerCase();
+    let domainInfo = '';
+
+    for (const [domain, knowledge] of this.domainModels) {
+      if (knowledge.patterns.some(pattern => pattern.test(taskLower))) {
+        const affinity = knowledge.agentAffinities[agentId] || 0;
+        if (affinity > 0.5) {
+          domainInfo += `\nDomain expertise: ${domain} (relevance: ${(affinity * 100).toFixed(0)}%)`;
+          domainInfo += `\nKey considerations: ${knowledge.complexityFactors.join(', ')}`;
+        }
+      }
+    }
+
+    return domainInfo;
+  }
+
+  private combinePromptElements(
+    basePrompt: string,
+    contextualEnhancements: string,
+    domainSpecificInfo: string,
+    context: ConversationContext | null
+  ): string {
+    let combinedPrompt = basePrompt;
+    
+    if (contextualEnhancements) {
+      combinedPrompt += contextualEnhancements;
+    }
+    
+    if (domainSpecificInfo) {
+      combinedPrompt += domainSpecificInfo;
+    }
+
+    if (context?.preferences?.verbosity === 'detailed') {
+      combinedPrompt += '\nProvide detailed explanations and step-by-step reasoning.';
+    } else if (context?.preferences?.verbosity === 'minimal') {
+      combinedPrompt += '\nBe concise and focus on key deliverables.';
+    }
+
+    return combinedPrompt;
+  }
+
+  private calculateAgentPriority(agentId: string, task: string, context: ConversationContext | null): number {
+    let priority = 1;
+
+    // Base priority from task relevance
+    const taskLower = task.toLowerCase();
+    for (const [domain, knowledge] of this.domainModels) {
+      if (knowledge.patterns.some(pattern => pattern.test(taskLower))) {
+        const affinity = knowledge.agentAffinities[agentId] || 0;
+        priority += affinity;
+      }
+    }
+
+    // Adjust based on user preferences
+    if (context?.preferences?.preferredAgents.includes(agentId)) {
+      priority += 0.5;
+    }
+    
+    if (context?.preferences?.avoidedAgents.includes(agentId)) {
+      priority -= 0.5;
+    }
+
+    return priority;
+  }
+
+  private estimateAgentComplexity(agentId: string, task: string): number {
+    const baseComplexity = this.calculateTaskComplexity(task);
+    
+    // Adjust based on agent specialization
+    const agentInfo = this.availableAgents[agentId];
+    if (!agentInfo) return baseComplexity;
+
+    const taskLower = task.toLowerCase();
+    let adjustment = 0;
+
+    // If task matches agent's expertise, complexity is lower for them
+    for (const expertise of agentInfo.bestFor) {
+      if (taskLower.includes(expertise.toLowerCase())) {
+        adjustment -= 1;
+      }
+    }
+
+    return Math.max(1, baseComplexity + adjustment);
+  }
+
+  private identifyAgentDependencies(agentId: string, allAgents: string[], task: string): string[] {
+    const dependencies: string[] = [];
+
+    // Architecture review should come first for complex tasks
+    if (agentId !== 'architecture-reviewer' && 
+        allAgents.includes('architecture-reviewer') && 
+        this.calculateTaskComplexity(task) > 5) {
+      dependencies.push('architecture-reviewer');
+    }
+
+    // Security should review blockchain implementations
+    if (agentId === 'security-audit-specialist' && 
+        allAgents.includes('solana-mobile-expert')) {
+      dependencies.push('solana-mobile-expert');
+    }
+
+    // Testing should come after implementation
+    if (agentId === 'test-automation-engineer') {
+      const implementationAgents = allAgents.filter(id => 
+        !['test-automation-engineer', 'architecture-reviewer', 'security-audit-specialist'].includes(id)
+      );
+      dependencies.push(...implementationAgents);
+    }
+
+    return dependencies;
+  }
+
+  private calculateIntentConfidence(match: RegExpExecArray, context: ConversationContext): number {
+    let confidence = 0.7; // Base confidence
+
+    // Increase confidence if similar intents in recent history
+    const recentIntents = context.history.slice(-3).map(turn => turn.intent).filter(Boolean);
+    if (recentIntents.length > 0) {
+      // Context consistency bonus
+      confidence += 0.1;
+    }
+
+    // Adjust based on match quality
+    if (match[0].length > 10) {
+      confidence += 0.1;
+    }
+
+    return Math.min(confidence, 1.0);
+  }
+
+  private extractEntities(input: string, match: RegExpExecArray): Record<string, string> {
+    const entities: Record<string, string> = {};
+    
+    if (match.length > 1) {
+      entities.task = match[1].trim();
+    }
+
+    // Extract common entities
+    const entityPatterns = {
+      agent: /(?:using|with|include)\s+([a-z-]+(?:\s+[a-z-]+)*)\s+agent/i,
+      strategy: /(?:strategy|approach|method):\s*([a-z_]+)/i,
+      timeline: /(?:by|within|in)\s+(\d+\s+(?:days?|weeks?|months?))/i,
+    };
+
+    for (const [entityType, pattern] of Object.entries(entityPatterns)) {
+      const entityMatch = pattern.exec(input);
+      if (entityMatch) {
+        entities[entityType] = entityMatch[1];
+      }
+    }
+
+    return entities;
+  }
+
+  private adjustConfidenceBasedOnContext(
+    classification: IntentClassification,
+    context: ConversationContext
+  ): number {
+    let adjustedConfidence = classification.confidence;
+
+    // If there's an active task and user is asking about status, boost confidence
+    if (classification.intent === 'query_status' && context.activeTask) {
+      adjustedConfidence += 0.2;
+    }
+
+    // If user has clear preferences that match the intent, boost confidence
+    if (context.preferences && classification.intent === 'express_preference') {
+      adjustedConfidence += 0.1;
+    }
+
+    return Math.min(adjustedConfidence, 1.0);
+  }
+
+  private enhancePlanWithContext(plan: OrchestrationPlan, context: ConversationContext): OrchestrationPlan {
+    const enhanced = { ...plan };
+
+    // Apply user preferences
+    if (context.preferences?.defaultStrategy) {
+      enhanced.coordinationStrategy = context.preferences.defaultStrategy;
+    }
+
+    // Filter agents based on preferences
+    if (context.preferences?.avoidedAgents.length) {
+      enhanced.suggestedAgents = enhanced.suggestedAgents.filter(
+        agentId => !context.preferences!.avoidedAgents.includes(agentId)
+      );
+    }
+
+    // Add preferred agents if they're relevant
+    if (context.preferences?.preferredAgents.length) {
+      const relevantPreferred = context.preferences.preferredAgents.filter(
+        agentId => this.isAgentRelevantForTask(agentId, plan.task)
+      );
+      
+      for (const agentId of relevantPreferred) {
+        if (!enhanced.suggestedAgents.includes(agentId)) {
+          enhanced.suggestedAgents.push(agentId);
+        }
+      }
+    }
+
+    return enhanced;
+  }
+
+  private applyTaskModification(currentTask: string, modification: string): string {
+    const modLower = modification.toLowerCase();
+    
+    if (modLower.startsWith('add') || modLower.startsWith('include') || modLower.startsWith('also')) {
+      const addition = modification.replace(/^(add|include|also)\s+/i, '');
+      return `${currentTask} and ${addition}`;
+    }
+    
+    if (modLower.startsWith('remove') || modLower.startsWith('exclude') || modLower.startsWith('skip')) {
+      // Simple implementation - would be more sophisticated in practice
+      return currentTask + ` (excluding ${modification.replace(/^(remove|exclude|skip)\s+/i, '')})`;
+    }
+    
+    if (modLower.startsWith('change') || modLower.startsWith('modify') || modLower.startsWith('update')) {
+      const change = modification.replace(/^(change|modify|update)\s+/i, '');
+      return `${currentTask} (modified: ${change})`;
+    }
+
+    return `${currentTask} (${modification})`;
+  }
+
+  private getContextualHelp(topic: string, context: ConversationContext): string[] {
+    if (!topic) {
+      return [
+        'Available commands:',
+        '• "orchestrate [task]" - Start a new orchestration',
+        '• "status" - Check current progress',
+        '• "help with [topic]" - Get specific help',
+        '• "I prefer [preference]" - Set preferences',
+      ];
+    }
+
+    const topicLower = topic.toLowerCase();
+    
+    if (topicLower.includes('agent')) {
+      return [
+        'Available agents:',
+        '• architecture-reviewer - Code design and patterns',
+        '• test-automation-engineer - Testing and quality',
+        '• security-audit-specialist - Security analysis',
+        '• hardware-integration-specialist - Device connectivity',
+        '• solana-mobile-expert - Blockchain integration',
+        '• performance-engineer - Optimization',
+        '• ux-director - User experience',
+        '• devops-engineer - Deployment',
+      ];
+    }
+
+    if (topicLower.includes('strategy') || topicLower.includes('coordination')) {
+      return [
+        'Coordination strategies:',
+        '• parallel - Agents work simultaneously',
+        '• sequential - Agents work one after another',
+        '• phased_parallel - Phases with parallel execution',
+        'Strategy is auto-selected based on task complexity',
+      ];
+    }
+
+    return [`Help topic "${topic}" - ask more specifically about agents, strategies, or commands`];
+  }
+
+  private parsePreference(preference: string): Partial<UserPreferences> {
+    const prefLower = preference.toLowerCase();
+    const parsed: Partial<UserPreferences> = {};
+
+    // Parse agent preferences
+    if (prefLower.includes('agent')) {
+      const agentIds = Object.keys(this.availableAgents);
+      const mentionedAgents = agentIds.filter(id => prefLower.includes(id.replace('-', ' ')));
+      
+      if (prefLower.includes('avoid') || prefLower.includes("don't")) {
+        parsed.avoidedAgents = mentionedAgents;
+      } else {
+        parsed.preferredAgents = mentionedAgents;
+      }
+    }
+
+    // Parse strategy preferences
+    if (prefLower.includes('parallel')) {
+      parsed.defaultStrategy = 'parallel';
+    } else if (prefLower.includes('sequential')) {
+      parsed.defaultStrategy = 'sequential';
+    } else if (prefLower.includes('phased')) {
+      parsed.defaultStrategy = 'phased_parallel';
+    }
+
+    // Parse verbosity preferences
+    if (prefLower.includes('detailed') || prefLower.includes('verbose')) {
+      parsed.verbosity = 'detailed';
+    } else if (prefLower.includes('minimal') || prefLower.includes('concise')) {
+      parsed.verbosity = 'minimal';
+    }
+
+    return parsed;
+  }
+
+  private getEnhancedAgentSuggestions(
+    task: string,
+    analysis: any,
+    context: ConversationContext | null
+  ): string[] {
+    let suggestions = this.suggestAgentsForTask(task);
+
+    // Apply domain-specific enhancements
+    for (const domain of analysis.domain) {
+      const domainKnowledge = this.domainModels.get(domain);
+      if (domainKnowledge) {
+        const domainAgents = Object.entries(domainKnowledge.agentAffinities)
+          .filter(([_, affinity]) => affinity > 0.6)
+          .map(([agentId]) => agentId);
+        
+        for (const agentId of domainAgents) {
+          if (!suggestions.includes(agentId)) {
+            suggestions.push(agentId);
+          }
+        }
+      }
+    }
+
+    // Apply user preferences
+    if (context?.preferences) {
+      const prefs = context.preferences;
+      
+      // Remove avoided agents
+      suggestions = suggestions.filter(id => !prefs.avoidedAgents.includes(id));
+      
+      // Prioritize preferred agents
+      const preferred = prefs.preferredAgents.filter(id => this.isAgentRelevantForTask(id, task));
+      suggestions = [...preferred, ...suggestions.filter(id => !preferred.includes(id))];
+    }
+
+    return suggestions.slice(0, 5); // Limit to top 5
+  }
+
+  private getStrategySuggestions(analysis: any, agentCount: number): CoordinationStrategy[] {
+    const strategies: CoordinationStrategy[] = [];
+
+    if (analysis.urgency === 'high' && agentCount >= 2) {
+      strategies.push('parallel');
+    }
+
+    if (analysis.complexity > 7) {
+      strategies.push('phased_parallel');
+    }
+
+    if (agentCount <= 2 || analysis.complexity <= 3) {
+      strategies.push('sequential');
+    }
+
+    // Always include parallel as an option
+    if (!strategies.includes('parallel')) {
+      strategies.push('parallel');
+    }
+
+    return strategies;
+  }
+
+  private getOptimizationSuggestions(
+    task: string,
+    analysis: any,
+    context: ConversationContext | null
+  ): string[] {
+    const optimizations: string[] = [];
+
+    if (analysis.complexity > 6) {
+      optimizations.push('Consider breaking down into smaller subtasks');
+    }
+
+    if (analysis.domain.length > 3) {
+      optimizations.push('Use phased execution to manage complexity');
+    }
+
+    if (context?.history && context.history.length > 5) {
+      optimizations.push('Leverage previous conversation context');
+    }
+
+    return optimizations;
+  }
+
+  private identifyRisks(task: string, analysis: any, agents: string[]): string[] {
+    const risks: string[] = [];
+
+    if (analysis.complexity > 8) {
+      risks.push('High complexity may lead to longer execution time');
+    }
+
+    if (agents.length > 4) {
+      risks.push('Multiple agents may require careful coordination');
+    }
+
+    if (analysis.domain.includes('blockchain') && analysis.domain.includes('hardware')) {
+      risks.push('Cross-domain integration complexity');
+    }
+
+    return risks;
+  }
+
+  private extractConstraints(task: string, history?: ConversationTurn[]): string[] {
+    const constraints: string[] = [];
+    const taskLower = task.toLowerCase();
+
+    // Time constraints
+    const timePatterns = [
+      /(?:by|within|before)\s+(\d+\s+(?:days?|weeks?|months?|hours?))/i,
+      /(?:urgent|asap|quickly|immediately)/i,
+    ];
+
+    for (const pattern of timePatterns) {
+      const match = pattern.exec(taskLower);
+      if (match) {
+        constraints.push(`Time constraint: ${match[1] || 'urgent'}`);
+      }
+    }
+
+    // Resource constraints
+    if (taskLower.includes('budget') || taskLower.includes('cost')) {
+      constraints.push('Budget constraints mentioned');
+    }
+
+    // Technical constraints
+    if (taskLower.includes('must use') || taskLower.includes('required to')) {
+      constraints.push('Technical requirements specified');
+    }
+
+    return constraints;
+  }
+
+  private determineUrgency(task: string, history?: ConversationTurn[]): 'low' | 'medium' | 'high' {
+    const taskLower = task.toLowerCase();
+    const urgencyKeywords = {
+      high: ['urgent', 'asap', 'immediately', 'critical', 'emergency'],
+      medium: ['soon', 'quickly', 'priority', 'important'],
+      low: ['eventually', 'when possible', 'later'],
+    };
+
+    for (const [level, keywords] of Object.entries(urgencyKeywords)) {
+      if (keywords.some(keyword => taskLower.includes(keyword))) {
+        return level as 'low' | 'medium' | 'high';
+      }
+    }
+
+    // Check conversation history for urgency indicators
+    if (history) {
+      const recentContent = history.slice(-3).map(turn => turn.content.toLowerCase()).join(' ');
+      for (const [level, keywords] of Object.entries(urgencyKeywords)) {
+        if (keywords.some(keyword => recentContent.includes(keyword))) {
+          return level as 'low' | 'medium' | 'high';
+        }
+      }
+    }
+
+    return 'medium'; // Default
+  }
+
+  private extractPreferences(history?: ConversationTurn[]): Record<string, any> {
+    const preferences: Record<string, any> = {};
+
+    if (!history) return preferences;
+
+    const recentContent = history.slice(-5).map(turn => turn.content.toLowerCase()).join(' ');
+
+    // Extract quality preferences
+    if (recentContent.includes('high quality') || recentContent.includes('thorough')) {
+      preferences.quality = 'high';
+    }
+
+    // Extract speed preferences
+    if (recentContent.includes('fast') || recentContent.includes('quick')) {
+      preferences.speed = 'high';
+    }
+
+    return preferences;
+  }
+
+  private isAgentRelevantForTask(agentId: string, task: string): boolean {
+    const agentInfo = this.availableAgents[agentId];
+    if (!agentInfo) return false;
+
+    const taskLower = task.toLowerCase();
+    
+    return agentInfo.bestFor.some(expertise => 
+      taskLower.includes(expertise.toLowerCase())
+    );
   }
 }

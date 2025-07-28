@@ -1,6 +1,6 @@
 {
   "name": "claude-code-orchestrator",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Multi-agent orchestration tool for Claude Code CLI instances",
   "main": "dist/index.js",
   "bin": {

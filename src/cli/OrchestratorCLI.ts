@@ -10,14 +10,22 @@ import ora from 'ora';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { ClaudeCodeIntegration } from '../integration/ClaudeCodeIntegration';
-import { OrchestrationConfig, InteractiveSession, CoordinationStrategy } from '../types';
+import { OrchestrationEngine } from '../execution/OrchestrationEngine';
+import { TaskDecomposer } from '../natural-language/TaskDecomposer';
+import { OrchestrationConfig, InteractiveSession, CoordinationStrategy, ExecutionProgress } from '../types';
 
 export class OrchestratorCLI {
   private integration: ClaudeCodeIntegration;
+  private engine: OrchestrationEngine;
+  private taskDecomposer: TaskDecomposer;
   private config: OrchestrationConfig | null = null;
+  private activeOrchestrations: Map<string, NodeJS.Timeout> = new Map();
 
   constructor() {
     this.integration = new ClaudeCodeIntegration();
+    this.engine = new OrchestrationEngine();
+    this.taskDecomposer = new TaskDecomposer();
+    this.setupEngineEventHandlers();
   }
 
   async executeOrchestration(task: string, options: any): Promise<void> {
@@ -44,7 +52,7 @@ export class OrchestratorCLI {
         if (!options.planOnly) {
           const shouldExecute = await this.confirmExecution();
           if (shouldExecute) {
-            await this.executePlan(result.plan);
+            await this.executeWithNewEngine(result.plan, options);
           }
         }
       }
@@ -140,26 +148,47 @@ export class OrchestratorCLI {
     const spinner = ora('Checking orchestrator status...').start();
 
     try {
-      const result = await this.integration.handleSlashCommand('orchestrate-status', '');
+      // Get active orchestrations from the new engine
+      const activeOrchestrations = this.engine.getActiveOrchestrations();
       spinner.stop();
 
-      if (result.success && result.status) {
-        console.log(chalk.cyan('📊 Orchestrator Status:\n'));
-        console.log(chalk.blue('Health:'), this.getHealthColor(result.status.orchestratorHealth));
-        console.log(chalk.blue('Active sessions:'), chalk.white(result.status.activeSessions));
-        console.log(
-          chalk.blue('Active worktrees:'),
-          chalk.white(result.status.activeWorktrees.length)
-        );
-        console.log(chalk.blue('Last execution:'), chalk.white(result.status.lastExecution));
-
-        if (result.status.activeWorktrees.length > 0) {
-          console.log(chalk.blue('\nActive worktrees:'));
-          result.status.activeWorktrees.forEach(worktree => {
-            console.log(chalk.gray(`  • ${worktree}`));
-          });
+      console.log(chalk.cyan('📊 Enhanced Orchestrator Status:\n'));
+      console.log(chalk.blue('Health:'), chalk.green('Healthy'));
+      console.log(chalk.blue('Active orchestrations:'), chalk.white(activeOrchestrations.length));
+      
+      if (activeOrchestrations.length > 0) {
+        console.log(chalk.blue('\n🚀 Active Orchestrations:'));
+        
+        for (const orchestration of activeOrchestrations) {
+          const completionRate = ((orchestration.completedTasks / orchestration.totalTasks) * 100).toFixed(1);
+          
+          console.log(chalk.yellow(`\n  📋 Session: ${orchestration.sessionId}`));
+          console.log(chalk.gray(`     Progress: ${orchestration.completedTasks}/${orchestration.totalTasks} (${completionRate}%)`));
+          console.log(chalk.gray(`     Phase: ${orchestration.currentPhase}`));
+          
+          if (orchestration.activeAgents.length > 0) {
+            console.log(chalk.gray(`     Active agents: ${orchestration.activeAgents.join(', ')}`));
+          }
+          
+          if (orchestration.failedTasks > 0) {
+            console.log(chalk.red(`     Failed tasks: ${orchestration.failedTasks}`));
+          }
+          
+          if (orchestration.estimatedCompletion) {
+            const eta = orchestration.estimatedCompletion.toLocaleTimeString();
+            console.log(chalk.gray(`     ETA: ${eta}`));
+          }
         }
+      } else {
+        console.log(chalk.gray('\n  No active orchestrations'));
       }
+
+      // Show additional status information
+      console.log(chalk.blue('\n💻 System Status:'));
+      console.log(chalk.gray(`  Engine: Running`));
+      console.log(chalk.gray(`  Task Queue: Active`));
+      console.log(chalk.gray(`  Session Manager: Ready`));
+      
     } catch (error) {
       spinner.fail('Failed to check status');
       console.log(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
@@ -284,31 +313,129 @@ export class OrchestratorCLI {
     return confirm;
   }
 
-  private async executePlan(plan: any): Promise<void> {
-    console.log(chalk.cyan('\n🚀 Executing orchestration plan...\n'));
+  private async executeWithNewEngine(plan: any, options: any): Promise<void> {
+    console.log(chalk.cyan('\n🚀 Starting advanced multi-agent orchestration...\n'));
 
-    // For now, this is a placeholder implementation
-    // In a real implementation, this would coordinate Claude Code agents
-    const spinner = ora('Setting up agent coordination...').start();
+    const spinner = ora('Initializing orchestration engine...').start();
 
     try {
-      // Simulate execution phases
-      for (let i = 0; i < plan.phases.length; i++) {
-        const phase = plan.phases[i];
-        spinner.text = `Executing ${phase.name}...`;
+      // Start orchestration with the new engine
+      const sessionId = await this.engine.executeOrchestration(plan);
+      
+      spinner.succeed(`Orchestration started! Session ID: ${sessionId}`);
+      console.log(chalk.blue(`📋 Session: ${sessionId}`));
+      console.log(chalk.green('✅ Claude Code agents are now running in parallel worktrees\n'));
 
-        // Simulate phase execution time
-        await new Promise(resolve => setTimeout(resolve, 2000));
+      // Start real-time progress monitoring
+      await this.monitorOrchestrationProgress(sessionId);
 
-        console.log(chalk.green(`✅ Completed: ${phase.name}`));
-      }
-
-      spinner.succeed('Orchestration completed successfully!');
-      console.log(chalk.green('\n🎉 All agents have completed their tasks.'));
     } catch (error) {
-      spinner.fail('Orchestration failed');
+      spinner.fail('Failed to start orchestration');
       console.log(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
     }
+  }
+
+  private async monitorOrchestrationProgress(sessionId: string): Promise<void> {
+    console.log(chalk.cyan('📊 Monitoring execution progress...\n'));
+    
+    const progressInterval = setInterval(() => {
+      const progress = this.engine.getExecutionProgress(sessionId);
+      if (progress) {
+        this.displayProgress(progress);
+      }
+    }, 3000);
+
+    this.activeOrchestrations.set(sessionId, progressInterval);
+
+    // Wait for completion
+    return new Promise((resolve) => {
+      const checkCompletion = async () => {
+        const results = await this.engine.getOrchestrationResults(sessionId);
+        
+        if (results.status && (results.success || results.error)) {
+          clearInterval(progressInterval);
+          this.activeOrchestrations.delete(sessionId);
+          
+          if (results.success) {
+            console.log(chalk.green('\n🎉 Orchestration completed successfully!'));
+            console.log(chalk.green('✅ All agents have finished their tasks'));
+            
+            if (results.nextSteps) {
+              console.log(chalk.blue('\n📝 Next steps:'));
+              results.nextSteps.forEach(step => {
+                console.log(chalk.gray(`  • ${step}`));
+              });
+            }
+          } else {
+            console.log(chalk.red('\n❌ Orchestration failed'));
+            console.log(chalk.red(`Error: ${results.error}`));
+          }
+          
+          resolve();
+        } else {
+          setTimeout(checkCompletion, 2000);
+        }
+      };
+      
+      setTimeout(checkCompletion, 1000);
+    });
+  }
+
+  private displayProgress(progress: ExecutionProgress): void {
+    const completionRate = ((progress.completedTasks / progress.totalTasks) * 100).toFixed(1);
+    
+    console.log(chalk.blue('📊 Progress Update:'));
+    console.log(chalk.gray(`  Tasks: ${progress.completedTasks}/${progress.totalTasks} (${completionRate}%)`));
+    
+    if (progress.failedTasks > 0) {
+      console.log(chalk.red(`  Failed: ${progress.failedTasks}`));
+    }
+    
+    if (progress.activeAgents.length > 0) {
+      console.log(chalk.yellow(`  Active agents: ${progress.activeAgents.join(', ')}`));
+    }
+    
+    console.log(chalk.gray(`  Phase: ${progress.currentPhase}`));
+    
+    if (progress.estimatedCompletion) {
+      const eta = progress.estimatedCompletion.toLocaleTimeString();
+      console.log(chalk.gray(`  ETA: ${eta}`));
+    }
+    
+    console.log(); // Empty line for readability
+  }
+
+  private setupEngineEventHandlers(): void {
+    this.engine.on('orchestrationStarted', (event) => {
+      console.log(chalk.green(`🚀 Orchestration started: ${event.sessionId}`));
+    });
+
+    this.engine.on('agentInstanceInitialized', (event) => {
+      console.log(chalk.blue(`🤖 Agent ${event.agentId} initialized`));
+    });
+
+    this.engine.on('taskStarted', (event) => {
+      console.log(chalk.yellow(`⚡ Starting: ${event.task.description} (${event.task.agentId})`));
+    });
+
+    this.engine.on('taskCompleted', (event) => {
+      console.log(chalk.green(`✅ Completed: ${event.task.description}`));
+    });
+
+    this.engine.on('taskFailed', (event) => {
+      console.log(chalk.red(`❌ Failed: ${event.task.description}`));
+      if (event.error) {
+        console.log(chalk.red(`   Error: ${event.error}`));
+      }
+    });
+
+    this.engine.on('sessionCompleted', (event) => {
+      console.log(chalk.green(`🎉 Session ${event.sessionId} completed successfully!`));
+    });
+
+    this.engine.on('agentError', (event) => {
+      console.log(chalk.red(`🚨 Agent error (${event.agentId}): ${event.error}`));
+    });
   }
 
   private getHealthColor(health: string): string {

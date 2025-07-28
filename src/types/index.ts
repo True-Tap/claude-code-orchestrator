@@ -53,7 +53,7 @@ export interface RiskMitigation {
   mitigation: string;
 }
 
-export type CoordinationStrategy = 'parallel' | 'sequential' | 'phased_parallel';
+export type CoordinationStrategy = 'parallel' | 'sequential' | 'phased_parallel' | 'adaptive' | 'consensus' | 'pipeline' | 'recovery';
 
 export interface OrchestrationConfig {
   agents: Record<string, AgentConfig>;
@@ -135,11 +135,13 @@ export interface ClaudeCodeExecutionResult {
 }
 
 export interface WorktreeInfo {
+  id: string;
   path: string;
   branch: string;
   agentId: string;
+  sessionId: string;
   created: Date;
-  status: 'active' | 'completed' | 'error';
+  status: 'active' | 'completed' | 'error' | 'merged' | 'cleaned';
 }
 
 export interface SessionInfo {
@@ -172,4 +174,169 @@ export interface TaskAnalysis {
   shouldOrchestrate: boolean;
   confidence: number;
   reason: string;
+}
+
+// Enhanced session and execution types
+export interface AgentSession {
+  id: string;
+  task: string;
+  agents: string[];
+  coordinationStrategy: CoordinationStrategy;
+  status: 'planning' | 'executing' | 'completed' | 'failed';
+  startTime: Date;
+  endTime?: Date;
+  worktrees: WorktreeInfo[];
+  state: SessionState;
+  metrics: SessionMetrics;
+}
+
+export interface SessionState {
+  currentPhase: string;
+  completedAgents: string[];
+  activeAgents: string[];
+  sharedContext: Record<string, any>;
+  dependencies: Map<string, string[]>;
+}
+
+export interface SessionMetrics {
+  tasksCompleted: number;
+  tasksFailes: number;
+  totalExecutionTime: number;
+  agentUtilization: Record<string, number>;
+}
+
+// Task execution types
+export interface AgentTask {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  description: string;
+  priority: 'high' | 'medium' | 'low';
+  dependencies: string[];
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'blocked';
+  assignedAt: Date;
+  startedAt?: Date;
+  completedAt?: Date;
+  result?: TaskResult;
+  retryCount: number;
+  maxRetries: number;
+}
+
+export interface TaskResult {
+  success: boolean;
+  output?: string;
+  error?: string;
+  artifacts?: string[];
+  metadata?: Record<string, any>;
+}
+
+// Natural language processing types
+export interface TaskDecomposition {
+  originalTask: string;
+  subtasks: SubTask[];
+  dependencies: TaskDependencyGraph;
+  estimatedComplexity: number;
+  recommendedStrategy: CoordinationStrategy;
+}
+
+export interface SubTask {
+  id: string;
+  description: string;
+  assignedAgent: string;
+  estimatedDuration: number;
+  dependencies: string[];
+  priority: 'high' | 'medium' | 'low';
+  deliverables: string[];
+}
+
+export interface TaskDependencyGraph {
+  nodes: string[];
+  edges: { from: string; to: string; type: 'blocks' | 'depends_on' | 'parallel' }[];
+}
+
+// Team coordination types
+export interface TeamWorkflow {
+  id: string;
+  name: string;
+  description: string;
+  phases: WorkflowPhase[];
+  agents: string[];
+  triggers: WorkflowTrigger[];
+}
+
+export interface WorkflowPhase {
+  id: string;
+  name: string;
+  agents: string[];
+  tasks: string[];
+  successCriteria: string[];
+  failureActions: string[];
+}
+
+export interface WorkflowTrigger {
+  type: 'completion' | 'error' | 'timeout' | 'manual';
+  condition: string;
+  action: string;
+}
+
+// Monitoring and analytics types
+export interface ExecutionMetrics {
+  sessionId: string;
+  agentId: string;
+  timestamp: Date;
+  cpuUsage: number;
+  memoryUsage: number;
+  taskQueue: number;
+  responseTime: number;
+  errorRate: number;
+}
+
+export interface AgentPerformance {
+  agentId: string;
+  totalTasks: number;
+  successRate: number;
+  averageExecutionTime: number;
+  averageResponseTime: number;
+  specializations: string[];
+  collaborationScore: number;
+}
+
+// Shared workspace types
+export interface WorkspaceEvent {
+  id: string;
+  type: 'file_created' | 'file_modified' | 'file_deleted' | 'conflict_detected' | 'merge_completed';
+  sessionId: string;
+  agentId: string;
+  timestamp: Date;
+  filePath: string;
+  metadata?: Record<string, any>;
+}
+
+export interface ConflictResolution {
+  id: string;
+  sessionId: string;
+  filePath: string;
+  conflictingAgents: string[];
+  resolutionStrategy: 'auto_merge' | 'manual_review' | 'agent_priority' | 'latest_wins';
+  status: 'pending' | 'resolved' | 'escalated';
+  resolution?: string;
+}
+
+// Execution engine types
+export interface ExecutionProgress {
+  sessionId: string;
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  activeAgents: string[];
+  currentPhase: string;
+  estimatedCompletion?: Date;
+}
+
+export interface ExecutionResult {
+  success: boolean;
+  output?: string;
+  error?: string;
+  executionTime: number;
+  instanceId: string;
 }
